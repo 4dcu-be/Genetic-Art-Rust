@@ -39,6 +39,72 @@ fn is_degenerate(points: &[(i32, i32); 3]) -> bool {
     area == 0
 }
 
+/// Draw a triangle with proper alpha blending
+///
+/// This function draws a filled triangle onto the image using proper alpha compositing.
+/// Unlike imageproc's draw_polygon_mut which replaces pixels, this function blends
+/// the triangle color with existing pixels based on the alpha channel.
+///
+/// # Alpha Compositing Formula (Porter-Duff "over" operation)
+/// For each pixel where the triangle overlaps:
+/// - result_color = (src_alpha * src_color) + ((1 - src_alpha) * dst_color)
+/// - result_alpha = src_alpha + ((1 - src_alpha) * dst_alpha)
+///
+/// # Parameters
+/// - `img`: The destination image to draw onto
+/// - `points`: The three vertices of the triangle
+/// - `color`: The RGBA color of the triangle (includes alpha channel)
+fn draw_triangle_with_alpha(img: &mut RgbaImage, points: &[Point<i32>], color: Rgba<u8>) {
+    let width = img.width();
+    let height = img.height();
+
+    // Extract alpha channel and normalize to 0.0-1.0 range
+    let src_alpha = color.0[3] as f32 / 255.0;
+
+    // If fully transparent, skip drawing
+    if src_alpha == 0.0 {
+        return;
+    }
+
+    // If fully opaque, use fast path with direct drawing (no blending needed)
+    if src_alpha == 1.0 {
+        draw_polygon_mut(img, points, color);
+        return;
+    }
+
+    // For semi-transparent triangles, we need to blend each pixel
+    // Strategy: Create a temporary image, draw the triangle opaquely, then blend
+
+    // Create a temporary image for the triangle (transparent background)
+    let mut temp_img = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+
+    // Draw the triangle onto the temporary image with full opacity
+    draw_polygon_mut(&mut temp_img, points, color);
+
+    // Blend the temporary image onto the main image using alpha compositing
+    for (x, y, temp_pixel) in temp_img.enumerate_pixels() {
+        // Skip fully transparent pixels (not part of the triangle)
+        if temp_pixel.0[3] == 0 {
+            continue;
+        }
+
+        // Get the destination pixel
+        let dst_pixel = img.get_pixel(x, y);
+
+        // Apply alpha blending formula for each color channel
+        let inv_alpha = 1.0 - src_alpha;
+        let blended = Rgba([
+            ((temp_pixel.0[0] as f32 * src_alpha) + (dst_pixel.0[0] as f32 * inv_alpha)) as u8,
+            ((temp_pixel.0[1] as f32 * src_alpha) + (dst_pixel.0[1] as f32 * inv_alpha)) as u8,
+            ((temp_pixel.0[2] as f32 * src_alpha) + (dst_pixel.0[2] as f32 * inv_alpha)) as u8,
+            // For output alpha: combine the alphas (assuming dst is fully opaque for white bg)
+            255, // Keep output fully opaque since we're compositing onto opaque white
+        ]);
+
+        img.put_pixel(x, y, blended);
+    }
+}
+
 /// A painting composed of multiple triangles
 ///
 /// This is the "chromosome" in our genetic algorithm - a collection of genes (triangles)
@@ -190,16 +256,17 @@ impl Painting {
                 .map(|&(x, y)| Point::new(x, y))
                 .collect();
 
-            // Draw the filled triangle onto the image
+            // Draw the filled triangle onto the image with proper alpha blending
             // `&mut img` - mutable borrow, allows modification
             // `&points` - immutable borrow of the points vector
             // `Rgba(triangle.color)` - convert color array to Rgba type
             //
             // **Performance note:**
             // This is the slowest part of the algorithm! Each triangle
-            // requires scanning and filling pixels. Rust's safety guarantees
-            // have zero overhead here - it's as fast as C.
-            draw_polygon_mut(&mut img, &points, Rgba(triangle.color));
+            // requires scanning and filling pixels. With alpha blending,
+            // semi-transparent triangles are composited properly on top of
+            // existing pixels using the Porter-Duff "over" operation.
+            draw_triangle_with_alpha(&mut img, &points, Rgba(triangle.color));
         }
 
         // Return the rendered image
