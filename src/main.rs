@@ -175,8 +175,9 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             // {elapsed_precise} = time elapsed
             // {bar} = the actual progress bar
             // {pos}/{len} = current/total
-            // {msg} = custom message
-            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} | {msg}")?
+            // {eta} = estimated time remaining
+            // {msg} = custom message (fitness stats)
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} (ETA: {eta}) | {msg}")?
             .progress_chars("=>-"),
     );
 
