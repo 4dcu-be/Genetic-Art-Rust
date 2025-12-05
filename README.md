@@ -28,11 +28,6 @@ cargo build --release
 ### Your First Evolution
 
 ```bash
-# Download a sample image (Van Gogh's Starry Night)
-mkdir -p input
-curl -o input/starry_night.jpg \
-  "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/800px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg"
-
 # Run a quick test (100 generations)
 ./target/release/genetic-art \
   --input input/starry_night.jpg \
