@@ -22,7 +22,7 @@ pub mod evolution;
 //   use genetic_art::Triangle;
 // instead of:
 //   use genetic_art::genes::Triangle;
-pub use genes::Triangle;
-pub use painting::Painting;
-pub use population::{Individual, Population};
+pub use genes::{Circle, Shape, Triangle};
+pub use painting::{Painting, ShapeType};
+pub use population::{FitnessConfig, FitnessFunction, Individual, Population};
 pub use evolution::EvolutionParams;

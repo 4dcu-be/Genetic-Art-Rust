@@ -2,7 +2,7 @@
 use clap::Parser;
 
 // Import our library types
-use genetic_art::{EvolutionParams, Population};
+use genetic_art::{EvolutionParams, FitnessConfig, FitnessFunction, Population, ShapeType};
 
 // Import indicatif for progress bars
 use indicatif::{ProgressBar, ProgressStyle};
@@ -11,10 +11,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::path::Path;
 
-/// Genetic Art Generator - Evolve triangles to recreate famous paintings
+/// Genetic Art Generator - Evolve shapes to recreate famous paintings
 ///
 /// This application uses a genetic algorithm to evolve a population of paintings
-/// (made of random triangles) to recreate a target image. Over generations, the
+/// (made of random shapes) to recreate a target image. Over generations, the
 /// paintings become increasingly similar to the target through selection, breeding,
 /// and mutation.
 ///
@@ -28,17 +28,23 @@ use std::path::Path;
 struct Args {
     /// Path to target image (PNG, JPEG, etc.)
     ///
-    /// This is the image we're trying to recreate with triangles.
+    /// This is the image we're trying to recreate with shapes.
     /// The algorithm will evolve paintings to match this as closely as possible.
     #[arg(short, long)]
     input: String,
 
-    /// Number of triangles per painting
+    /// Type of shape to use (triangle or circle)
     ///
-    /// More triangles = more detail possible, but slower evolution
+    /// Determines which shape primitive will be evolved
+    #[arg(short = 's', long, default_value = "triangle")]
+    shape: String,
+
+    /// Number of shapes per painting
+    ///
+    /// More shapes = more detail possible, but slower evolution
     /// Recommended: 50-200
-    #[arg(short, long, default_value_t = 150)]
-    triangles: usize,
+    #[arg(short = 'n', long, default_value_t = 150)]
+    shapes: usize,
 
     /// Population size (number of paintings evolving simultaneously)
     ///
@@ -67,7 +73,7 @@ struct Args {
     #[arg(long, default_value_t = 50)]
     save_interval: usize,
 
-    /// Mutation rate (fraction of triangles to mutate, 0.0-1.0)
+    /// Mutation rate (fraction of shapes to mutate, 0.0-1.0)
     ///
     /// Higher = more variation per generation
     /// Lower = more stable evolution
@@ -87,6 +93,46 @@ struct Args {
     /// Lower = smaller adjustments
     #[arg(long, default_value_t = 1.0)]
     sigma: f32,
+
+    /// Fitness function to use for image comparison
+    ///
+    /// - mad: Mean Absolute Difference (fast, uniform pixel weighting)
+    /// - edge-weighted: Emphasizes edges and details (2x slower)
+    /// - ms-ssim: Multi-scale Structural Similarity (best quality, 5-10x slower)
+    #[arg(long, default_value = "mad")]
+    fitness_function: FitnessFunction,
+
+    /// Edge emphasis power (edge-weighted only)
+    ///
+    /// Controls how strongly edges are weighted:
+    /// - 1.0 = linear weighting
+    /// - 2.0 = quadratic (default, strong emphasis)
+    /// - 0.5 = sublinear (gentle emphasis)
+    #[arg(long, default_value_t = 2.0)]
+    edge_power: f64,
+
+    /// Edge weight scale factor (edge-weighted only)
+    ///
+    /// Maximum weight multiplier for high-gradient regions
+    /// Higher = stronger emphasis on edges vs uniform areas
+    #[arg(long, default_value_t = 4.0)]
+    edge_scale: f64,
+
+    /// Detail scale weight (ms-ssim only)
+    ///
+    /// Exponential weight applied to finer scales:
+    /// - 1.0 = equal weighting across all scales
+    /// - 2.0 = each finer scale gets 2x more weight (default)
+    /// - 3.0 = aggressive fine-detail emphasis
+    #[arg(long, default_value_t = 2.0)]
+    detail_weight: f64,
+
+    /// Number of threads for parallel processing
+    ///
+    /// Limits Rayon's thread pool size. By default, uses all available CPU cores.
+    /// Set lower to reduce CPU usage or when running multiple instances.
+    #[arg(short = 't', long)]
+    threads: Option<usize>,
 }
 
 /// Main entry point for the CLI application
@@ -126,6 +172,17 @@ fn main() {
 /// - Image loading errors (image::Error)
 /// - etc.
 fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+    // Step 0: Configure Rayon thread pool if thread limit is specified
+    if let Some(num_threads) = args.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build_global()
+            .map_err(|e| format!("Failed to configure thread pool: {}", e))?;
+        println!("Using {} thread(s) for parallel processing", num_threads);
+    } else {
+        println!("Using all available CPU cores for parallel processing");
+    }
+
     // Step 1: Create output directory if it doesn't exist
     println!("Setting up output directory...");
     fs::create_dir_all(&args.output)?;
@@ -147,17 +204,31 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let (width, height) = target.dimensions();
     println!("Image dimensions: {}x{}", width, height);
 
-    // Step 3: Create initial population
+    // Parse shape type
+    let shape_type: ShapeType = args.shape.parse()
+        .map_err(|e| format!("Invalid shape type: {}", e))?;
+
+    // Step 3: Create fitness configuration
+    let fitness_config = FitnessConfig::new(
+        args.fitness_function,
+        args.edge_power,
+        args.edge_scale,
+        args.detail_weight,
+    );
+
+    // Step 4: Create initial population
     println!("\nInitializing genetic algorithm...");
+    println!("  Shape type: {:?}", shape_type);
     println!("  Population size: {}", args.population);
-    println!("  Triangles per painting: {}", args.triangles);
+    println!("  Shapes per painting: {}", args.shapes);
     println!("  Generations: {}", args.generations);
     println!("  Mutation rate: {:.1}%", args.mutation_rate * 100.0);
     println!("  Survival rate: {:.1}%", args.survival_rate * 100.0);
+    println!("  Fitness function: {:?}", args.fitness_function);
 
-    let mut pop = Population::new(args.population, args.triangles, target);
+    let mut pop = Population::new(args.population, args.shapes, target, shape_type, fitness_config);
 
-    // Step 4: Configure evolution parameters
+    // Step 5: Configure evolution parameters
     let params = EvolutionParams {
         population_size: args.population,
         survival_rate: args.survival_rate,
@@ -166,7 +237,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         sigma: args.sigma,
     };
 
-    // Step 5: Setup progress bar
+    // Step 6: Setup progress bar
     // `indicatif` creates beautiful terminal progress bars
     let pb = ProgressBar::new(args.generations as u64);
     pb.set_style(
@@ -183,7 +254,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n🧬 Starting evolution...\n");
 
-    // Step 6: Evolution loop!
+    // Step 7: Evolution loop!
     // This is where the magic happens
     for gen in 0..args.generations {
         // Evolve one generation
@@ -213,7 +284,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     // Finish progress bar with success message
     pb.finish_with_message("Evolution complete! 🎉");
 
-    // Step 7: Print final statistics
+    // Step 8: Print final statistics
     let best = pop.best();
     println!("\n✨ Results:");
     println!("  Final fitness: {:.2}", best.fitness.unwrap());

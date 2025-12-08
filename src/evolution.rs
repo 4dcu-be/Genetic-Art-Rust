@@ -1,5 +1,5 @@
 // Import types we need
-use crate::painting::Painting;
+use crate::painting::{Painting, ShapeType};
 use crate::population::{Individual, Population};
 use rand::Rng;
 
@@ -94,7 +94,7 @@ impl Population {
     /// Breed two paintings to create offspring
     ///
     /// **Genetic Operator: Uniform Crossover**
-    /// For each triangle, randomly choose from either parent
+    /// For each shape, randomly choose from either parent
     /// This is called "uniform crossover" in genetic algorithms
     ///
     /// **Why static method?**
@@ -105,27 +105,27 @@ impl Population {
     /// - Takes `&Painting` (borrowed references) not `Painting` (ownership)
     /// - We're just reading the parents, not consuming them
     /// - They can be used again after this function returns
-    pub fn breed(parent_a: &Painting, parent_b: &Painting) -> Painting {
+    pub fn breed(parent_a: &Painting, parent_b: &Painting, shape_type: ShapeType) -> Painting {
         let mut rng = rand::thread_rng();
         let (width, height) = parent_a.dimensions();
 
-        // Start with empty painting (0 triangles)
-        let mut child = Painting::new(0, width, height, [255, 255, 255, 255]);
+        // Start with empty painting (0 shapes)
+        let mut child = Painting::new(0, width, height, [255, 255, 255, 255], shape_type);
 
-        // For each triangle position, randomly pick from either parent
-        // `.zip()` pairs up triangles from both parents
-        // Both parents have same number of triangles (by design)
-        for (tri_a, tri_b) in parent_a.triangles.iter().zip(&parent_b.triangles) {
+        // For each shape position, randomly pick from either parent
+        // `.zip()` pairs up shapes from both parents
+        // Both parents have same number of shapes (by design)
+        for (shape_a, shape_b) in parent_a.shapes.iter().zip(&parent_b.shapes) {
             // Flip a coin: 50% chance of each parent
             if rng.gen_bool(0.5) {
-                child.triangles.push(tri_a.clone()); // Clone from parent A
+                child.shapes.push(shape_a.clone()); // Clone from parent A
             } else {
-                child.triangles.push(tri_b.clone()); // Clone from parent B
+                child.shapes.push(shape_b.clone()); // Clone from parent B
             }
         }
 
         // **Genetic Diversity Note:**
-        // This creates a new unique combination of triangles
+        // This creates a new unique combination of shapes
         // Some from mom, some from dad
         // Like genetic recombination in biology!
 
@@ -204,7 +204,7 @@ impl Population {
             // **Rust Concept: References vs Values**
             // `&mom.chromosome` - we're borrowing, not taking ownership
             // This is important because we might breed from the same parents multiple times!
-            let mut child_chromosome = Self::breed(&mom.chromosome, &dad.chromosome);
+            let mut child_chromosome = Self::breed(&mom.chromosome, &dad.chromosome, self.shape_type);
 
             // Mutate the child
             // This introduces variation - the key to evolution!
@@ -248,12 +248,12 @@ mod tests {
     #[test]
     fn test_breeding() {
         // Create two different paintings
-        let parent_a = Painting::new(10, 100, 100, [255, 255, 255, 255]);
-        let parent_b = Painting::new(10, 100, 100, [255, 255, 255, 255]);
+        let parent_a = Painting::new(10, 100, 100, [255, 255, 255, 255], ShapeType::Triangle);
+        let parent_b = Painting::new(10, 100, 100, [255, 255, 255, 255], ShapeType::Triangle);
 
-        let child = Population::breed(&parent_a, &parent_b);
+        let child = Population::breed(&parent_a, &parent_b, ShapeType::Triangle);
 
-        // Child should have same number of triangles
+        // Child should have same number of shapes
         assert_eq!(child.len(), 10);
 
         // Child should have same dimensions
@@ -263,7 +263,8 @@ mod tests {
     #[test]
     fn test_parent_selection() {
         let target = RgbaImage::from_pixel(100, 100, Rgba([128, 128, 128, 255]));
-        let mut pop = Population::new(20, 5, target);
+        let fitness_config = crate::population::FitnessConfig::new(crate::population::FitnessFunction::Mad, 2.0, 4.0, 2.0);
+        let mut pop = Population::new(20, 5, target, ShapeType::Triangle, fitness_config);
 
         // Evaluate so we can select
         pop.evaluate();
@@ -282,7 +283,8 @@ mod tests {
     #[test]
     fn test_evolution_cycle() {
         let target = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
-        let mut pop = Population::new(20, 5, target);
+        let fitness_config = crate::population::FitnessConfig::new(crate::population::FitnessFunction::Mad, 2.0, 4.0, 2.0);
+        let mut pop = Population::new(20, 5, target, ShapeType::Triangle, fitness_config);
 
         let params = EvolutionParams::default();
 
@@ -315,7 +317,8 @@ mod tests {
     fn test_multiple_generations() {
         // Run multiple generations and verify it works correctly
         let target = RgbaImage::from_pixel(50, 50, Rgba([100, 100, 100, 255]));
-        let mut pop = Population::new(50, 10, target);
+        let fitness_config = crate::population::FitnessConfig::new(crate::population::FitnessFunction::Mad, 2.0, 4.0, 2.0);
+        let mut pop = Population::new(50, 10, target, ShapeType::Circle, fitness_config);
 
         let params = EvolutionParams {
             population_size: 50,
@@ -351,7 +354,8 @@ mod tests {
     fn test_survival_maintains_minimum() {
         // Test that we keep at least 2 survivors even with very low survival rate
         let target = RgbaImage::from_pixel(100, 100, Rgba([0, 0, 0, 255]));
-        let mut pop = Population::new(100, 5, target);
+        let fitness_config = crate::population::FitnessConfig::new(crate::population::FitnessFunction::Mad, 2.0, 4.0, 2.0);
+        let mut pop = Population::new(100, 5, target, ShapeType::Triangle, fitness_config);
 
         let params = EvolutionParams {
             population_size: 100,

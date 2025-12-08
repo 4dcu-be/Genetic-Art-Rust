@@ -1,6 +1,6 @@
 # Genetic Art Generator 🎨
 
-A high-performance genetic algorithm implementation in Rust that evolves random triangles to recreate famous paintings. Watch as natural selection, crossover breeding, and mutation combine to transform chaos into art!
+A high-performance genetic algorithm implementation in Rust that evolves random shapes (triangles or circles) to recreate famous paintings. Watch as natural selection, crossover breeding, and mutation combine to transform chaos into art!
 
 ![Rust Version](https://img.shields.io/badge/rust-1.91+-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
@@ -28,11 +28,18 @@ cargo build --release
 ### Your First Evolution
 
 ```bash
-# Run a quick test (100 generations)
+# Run a quick test with triangles (100 generations)
 ./target/release/genetic-art \
   --input input/starry_night.jpg \
   --generations 100 \
-  --triangles 100
+  --shapes 100
+
+# Or try with circles!
+./target/release/genetic-art \
+  --input input/starry_night.jpg \
+  --shape circle \
+  --generations 100 \
+  --shapes 100
 
 # Check the result
 open output/latest.png  # macOS
@@ -46,7 +53,7 @@ xdg-open output/latest.png  # Linux
 
 The algorithm uses a genetic approach inspired by natural evolution:
 
-1. **Initialize**: Create 200 random "paintings" (each made of 150 triangles)
+1. **Initialize**: Create 200 random "paintings" (each made of 150 shapes - triangles or circles)
 2. **Evaluate**: Compare each painting to the target image (fitness score)
 3. **Select**: Keep only the best 5% (natural selection)
 4. **Breed**: Cross-breed survivors to create offspring
@@ -57,14 +64,12 @@ Over time, the paintings evolve to increasingly resemble the target!
 
 ### Why Rust?
 
-This implementation is **20-50x faster** than equivalent Python code:
+This implementation is **10-20x faster** than equivalent Python code:
 
 - **Zero-cost abstractions**: High-level code compiles to efficient machine code
 - **Parallel processing**: Automatically uses all CPU cores (via Rayon)
 - **Memory safety**: No garbage collection pauses, no memory leaks
 - **Optimized rendering**: Fast triangle rasterization
-
-**Performance:** On a modern 6-core CPU, ~3-4 generations per second with 200 individuals.
 
 ---
 
@@ -100,7 +105,8 @@ genetic-art [OPTIONS] --input <INPUT>
 
 | Flag | Default | Range | Description |
 |------|---------|-------|-------------|
-| `-t, --triangles <NUM>` | 150 | 10-500 | Number of triangles per painting. More = more detail possible but slower evolution |
+| `-s, --shape <TYPE>` | triangle | triangle, circle | Type of shape to use (triangle or circle) |
+| `-n, --shapes <NUM>` | 150 | 10-500 | Number of shapes per painting. More = more detail possible but slower evolution |
 | `-p, --population <NUM>` | 200 | 50-1000 | Population size. Larger = more diversity but slower per generation |
 | `-g, --generations <NUM>` | 5000 | 100-50000 | Number of generations. More = better results but takes longer |
 
@@ -108,9 +114,18 @@ genetic-art [OPTIONS] --input <INPUT>
 
 | Flag | Default | Range | Description |
 |------|---------|-------|-------------|
-| `--mutation-rate <RATE>` | 0.04 | 0.0-1.0 | Fraction of triangles to mutate. Higher = more variation |
+| `--mutation-rate <RATE>` | 0.04 | 0.0-1.0 | Fraction of shapes to mutate. Higher = more variation |
 | `--survival-rate <RATE>` | 0.05 | 0.0-1.0 | Fraction that survives. Lower = stronger selection pressure |
 | `--sigma <STRENGTH>` | 1.0 | 0.0-2.0 | Mutation strength. Higher = larger random changes |
+
+#### Fitness Function Parameters
+
+| Flag | Default | Options | Description |
+|------|---------|---------|-------------|
+| `--fitness-function <FUNC>` | mad | mad, edge-weighted, ms-ssim | Fitness function for image comparison |
+| `--edge-power <POWER>` | 2.0 | 0.5-3.0 | Edge emphasis power (edge-weighted only) |
+| `--edge-scale <SCALE>` | 4.0 | 1.0-10.0 | Edge weight scale factor (edge-weighted only) |
+| `--detail-weight <WEIGHT>` | 2.0 | 1.0-5.0 | Detail scale weight (ms-ssim only) |
 
 #### Output Parameters
 
@@ -119,16 +134,22 @@ genetic-art [OPTIONS] --input <INPUT>
 | `-o, --output <DIR>` | ./output | Directory for generated images |
 | `--save-interval <NUM>` | 50 | Save image every N generations |
 
+#### Performance Parameters
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-t, --threads <NUM>` | All cores | Number of threads for parallel processing. Set lower to reduce CPU usage |
+
 ---
 
 ## 💡 Usage Examples
 
 ### Quick Test (1 minute)
 ```bash
-# Fast test with fewer generations and triangles
+# Fast test with fewer generations and shapes
 ./target/release/genetic-art \
   --input input/image.jpg \
-  --triangles 50 \
+  --shapes 50 \
   --generations 500
 ```
 
@@ -137,7 +158,7 @@ genetic-art [OPTIONS] --input <INPUT>
 # Full quality evolution
 ./target/release/genetic-art \
   --input input/image.jpg \
-  --triangles 150 \
+  --shapes 150 \
   --generations 5000
 ```
 
@@ -146,10 +167,40 @@ genetic-art [OPTIONS] --input <INPUT>
 # Very high detail (slow but beautiful)
 ./target/release/genetic-art \
   --input input/image.jpg \
-  --triangles 250 \
+  --shapes 250 \
   --population 300 \
   --generations 10000 \
   --save-interval 100
+```
+
+### Limited CPU Usage
+```bash
+# Run with only 4 threads (useful when multitasking)
+./target/release/genetic-art \
+  --input input/image.jpg \
+  --threads 4 \
+  --generations 5000
+```
+
+### Using Edge-Weighted Fitness (Emphasize Details)
+```bash
+# Prioritizes edges and fine details over uniform areas
+./target/release/genetic-art \
+  --input input/image.jpg \
+  --fitness-function edge-weighted \
+  --edge-power 2.0 \
+  --edge-scale 4.0 \
+  --generations 5000
+```
+
+### Using MS-SSIM Fitness (Best Quality)
+```bash
+# Multi-scale structural similarity (slower but best quality)
+./target/release/genetic-art \
+  --input input/image.jpg \
+  --fitness-function ms-ssim \
+  --detail-weight 2.0 \
+  --generations 5000
 ```
 
 ### Aggressive Evolution
@@ -176,15 +227,15 @@ genetic-art [OPTIONS] --input <INPUT>
 
 ## 📊 Understanding the Parameters
 
-### Triangles (`-t, --triangles`)
+### Shapes (`-n, --shapes`)
 
-**What it does:** Sets how many triangles compose each painting.
+**What it does:** Sets how many shapes (triangles or circles) compose each painting.
 
 - **50-100**: Abstract style, fast evolution
 - **150-200**: Good balance (recommended)
 - **250-500**: High detail, slower but more accurate
 
-**Trade-off:** More triangles = more detail possible, but each generation takes longer to compute.
+**Trade-off:** More shapes = more detail possible, but each generation takes longer to compute.
 
 ### Population Size (`-p, --population`)
 
@@ -208,7 +259,7 @@ genetic-art [OPTIONS] --input <INPUT>
 
 ### Mutation Rate (`--mutation-rate`)
 
-**What it does:** Fraction of triangles that mutate in each offspring (0.0-1.0).
+**What it does:** Fraction of shapes that mutate in each offspring (0.0-1.0).
 
 - **0.02-0.03**: Conservative (small changes)
 - **0.04-0.06**: Balanced (recommended)
@@ -235,6 +286,69 @@ genetic-art [OPTIONS] --input <INPUT>
 - **1.5-2.0**: Large jumps (exploration)
 
 **Trade-off:** Higher values make bigger random changes, good for escaping local optima but can disrupt good solutions.
+
+### Fitness Functions (`--fitness-function`)
+
+**What it does:** Determines how the algorithm compares rendered images to the target.
+
+#### MAD (Mean Absolute Difference) - Default
+- **Speed:** Fastest (baseline)
+- **Behavior:** Treats all pixels uniformly
+- **Best for:** General use, quick iterations
+- **Formula:** `sum(|pixel_source - pixel_target|) / (width × height × 3)`
+
+```bash
+--fitness-function mad
+```
+
+#### Edge-Weighted MAD
+- **Speed:** ~2x slower than MAD
+- **Behavior:** Emphasizes pixels near edges and details
+- **Best for:** Images with important fine details (portraits, text, intricate patterns)
+- **How it works:**
+  - Detects edges in target image using Sobel operator
+  - Assigns higher weights to pixels near edges
+  - Getting edge details wrong costs more than uniform areas
+- **Parameters:**
+  - `--edge-power`: Controls emphasis strength (1.0 = linear, 2.0 = quadratic)
+  - `--edge-scale`: Maximum weight multiplier (4.0 = edges 5x more important)
+
+```bash
+--fitness-function edge-weighted --edge-power 2.0 --edge-scale 4.0
+```
+
+**Example:** For a portrait, getting the eyes and facial features right matters more than the background sky.
+
+#### MS-SSIM (Multi-Scale Structural Similarity)
+- **Speed:** ~5-10x slower than MAD
+- **Behavior:** Evaluates similarity at multiple scales (resolutions)
+- **Best for:** Highest quality results when time permits
+- **How it works:**
+  - Creates image pyramid (5 scales: 1x, 0.5x, 0.25x, etc.)
+  - Compares structure, contrast, and luminance at each scale
+  - Finer scales capture details, coarser scales capture overall composition
+  - Weights can emphasize fine details
+- **Parameters:**
+  - `--detail-weight`: Exponential weight for finer scales (2.0 = each finer scale 2x more important)
+
+```bash
+--fitness-function ms-ssim --detail-weight 2.0
+```
+
+**Example:** Better at capturing both overall composition AND fine details simultaneously.
+
+#### Choosing a Fitness Function
+
+| Use Case | Recommended Function | Reason |
+|----------|---------------------|--------|
+| Quick experiments | MAD | Fastest, good general results |
+| Portraits/faces | Edge-Weighted | Emphasizes facial features |
+| Text/logos | Edge-Weighted | Sharp edges are critical |
+| Landscapes | MAD or MS-SSIM | Balance of detail and speed |
+| Artistic quality | MS-SSIM | Best perceptual quality |
+| Limited time | MAD | Best speed/quality ratio |
+
+**Color Handling:** All fitness functions compare full RGB colors correctly. Edge-weighted uses grayscale ONLY to detect edges, but still compares colors when computing fitness.
 
 ---
 
@@ -270,25 +384,36 @@ ffmpeg -framerate 10 -pattern_type glob -i 'output/generation_*.png' \
 - Plus random selection for second parent (maintains diversity)
 
 **Crossover:**
-- Uniform crossover: Each triangle randomly chosen from either parent
+- Uniform crossover: Each shape randomly chosen from either parent
 - 50/50 chance for each gene
 
 **Mutation:**
-- Triangle shift: Move entire triangle
-- Point mutation: Move single vertex
-- Color mutation: Change RGB values
+- Shape shift: Move entire shape
+- Point mutation: Move single vertex (triangles) or center (circles)
+- Color mutation: Change RGB and alpha values
 - Reset: Complete randomization (rare)
-- Z-order swap: Change triangle rendering order
+- Z-order swap: Change shape rendering order
+- Radius mutation: Change circle size (circles only)
 
-### Fitness Function
+### Fitness Functions
 
-Uses mean absolute difference (MAD) between images:
+Three fitness functions available via `--fitness-function`:
 
+**MAD (Mean Absolute Difference)** - Default:
 ```
 fitness = sum(|pixel_source - pixel_target|) / (width × height × 3)
 ```
 
-Lower score = better match. Perfect match = 0.0.
+**Edge-Weighted MAD:**
+```
+fitness = sum(weight_pixel × |pixel_source - pixel_target|) / sum(weights)
+```
+Where weights are higher near edges detected in the target image.
+
+**MS-SSIM (Multi-Scale Structural Similarity):**
+Compares images at multiple resolutions using structural similarity metrics.
+
+Lower score = better match. Perfect match = 0.0 (for MAD and Edge-Weighted) or 255.0 (for MS-SSIM converted to same scale).
 
 ### Parallel Processing
 
@@ -350,16 +475,19 @@ src/
 
 1. **Use release mode**: `cargo build --release` (10-100x faster than debug!)
 2. **Start small**: Test with `--generations 100` first
-3. **Reduce triangles**: Start with `--triangles 50` for quick iteration
-4. **Increase save interval**: `--save-interval 100` reduces I/O overhead
-5. **Use smaller images**: Resize target to 400-800px width
+3. **Reduce shapes**: Start with `--shapes 50` for quick iteration
+4. **Use MAD fitness**: `--fitness-function mad` (fastest option)
+5. **Increase save interval**: `--save-interval 100` reduces I/O overhead
+6. **Use smaller images**: Resize target to 400-800px width
 
 ### For Best Quality
 
 1. **More generations**: 5000-10000 generations
-2. **More triangles**: 150-250 triangles
+2. **More shapes**: 150-250 shapes
 3. **Larger population**: 200-300 individuals
-4. **Let it run overnight**: Best results take time!
+4. **Try MS-SSIM fitness**: `--fitness-function ms-ssim` for perceptually better results
+5. **Use edge-weighted for portraits**: `--fitness-function edge-weighted` for detailed faces
+6. **Let it run overnight**: Best results take time!
 
 ### Expected Runtime
 
@@ -395,17 +523,26 @@ On a modern 6-core CPU (2.5 GHz):
 
 **For portraits:**
 ```bash
---triangles 200 --sigma 0.8 --mutation-rate 0.05
+--shapes 200 --sigma 0.8 --mutation-rate 0.05 \
+--fitness-function edge-weighted --edge-power 2.0
 ```
 
 **For landscapes:**
 ```bash
---triangles 150 --sigma 1.2 --mutation-rate 0.06
+--shapes 150 --sigma 1.2 --mutation-rate 0.06 \
+--fitness-function mad
 ```
 
 **For abstract art:**
 ```bash
---triangles 100 --sigma 1.5 --survival-rate 0.03
+--shapes 100 --sigma 1.5 --survival-rate 0.03 \
+--fitness-function mad
+```
+
+**For maximum detail:**
+```bash
+--shapes 250 --fitness-function ms-ssim \
+--detail-weight 2.5 --generations 10000
 ```
 
 ---
@@ -421,9 +558,9 @@ On a modern 6-core CPU (2.5 GHz):
 
 ### Out of Memory
 
-**Solution:** Reduce population size or triangle count.
+**Solution:** Reduce population size or shape count.
 ```bash
---population 100 --triangles 100
+--population 100 --shapes 100
 ```
 
 ### Very Slow Performance
@@ -482,15 +619,19 @@ MIT License - see LICENSE file for details.
 
 ## 🎯 Future Enhancements
 
-Potential improvements:
+Completed features:
+- [x] Multiple shape types (triangles, circles)
+- [x] Alternative fitness functions (Edge-Weighted, MS-SSIM)
 
+Potential improvements:
 - [ ] Resume from checkpoint
 - [ ] Real-time preview window
-- [ ] Multiple shape types (circles, polygons)
+- [ ] Additional shape types (polygons, ellipses)
 - [ ] Adaptive mutation rates
 - [ ] Multi-objective optimization
 - [ ] GPU acceleration
 - [ ] WebAssembly port
+- [ ] Hybrid fitness functions (combine multiple metrics)
 
 ---
 
