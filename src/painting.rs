@@ -45,6 +45,112 @@ impl FromStr for ShapeType {
     }
 }
 
+/// Bounding box clipped to image bounds
+///
+/// Represents a rectangular region with inclusive min/max coordinates.
+/// Used to optimize alpha blending by rendering only the region containing a shape
+/// instead of allocating full-image temporary buffers.
+struct BoundingBox {
+    min_x: u32,
+    min_y: u32,
+    max_x: u32, // inclusive
+    max_y: u32, // inclusive
+}
+
+impl BoundingBox {
+    /// Width of the bounding box (inclusive)
+    fn width(&self) -> u32 {
+        self.max_x - self.min_x + 1
+    }
+
+    /// Height of the bounding box (inclusive)
+    fn height(&self) -> u32 {
+        self.max_y - self.min_y + 1
+    }
+}
+
+/// Compute bounding box for a triangle, clipped to image bounds
+///
+/// Returns None if the triangle is entirely outside the image.
+/// Handles edge cases: negative coordinates, coords beyond image, partially visible shapes.
+///
+/// # Arguments
+/// * `points` - The three vertices of the triangle as (x, y) tuples
+/// * `img_width` - Image width in pixels
+/// * `img_height` - Image height in pixels
+fn compute_triangle_bbox(
+    points: &[(i32, i32); 3],
+    img_width: u32,
+    img_height: u32,
+) -> Option<BoundingBox> {
+    // Find raw bounding box (min/max of all coordinates)
+    let raw_min_x = points.iter().map(|p| p.0).min().unwrap();
+    let raw_max_x = points.iter().map(|p| p.0).max().unwrap();
+    let raw_min_y = points.iter().map(|p| p.1).min().unwrap();
+    let raw_max_y = points.iter().map(|p| p.1).max().unwrap();
+
+    // Clamp to image bounds [0, width-1] × [0, height-1]
+    // Using i32 for comparison, then convert to u32 for storage
+    let min_x = raw_min_x.max(0);
+    let max_x = raw_max_x.min(img_width as i32 - 1);
+    let min_y = raw_min_y.max(0);
+    let max_y = raw_max_y.min(img_height as i32 - 1);
+
+    // Return None if shape is entirely outside image
+    // (clamping caused min > max)
+    if min_x > max_x || min_y > max_y {
+        return None;
+    }
+
+    Some(BoundingBox {
+        min_x: min_x as u32,
+        max_x: max_x as u32,
+        min_y: min_y as u32,
+        max_y: max_y as u32,
+    })
+}
+
+/// Compute bounding box for a circle, clipped to image bounds
+///
+/// Returns None if the circle is entirely outside the image.
+/// Circle bounding box is center ± radius.
+///
+/// # Arguments
+/// * `center` - Circle center as (x, y) tuple
+/// * `radius` - Circle radius in pixels
+/// * `img_width` - Image width in pixels
+/// * `img_height` - Image height in pixels
+fn compute_circle_bbox(
+    center: (i32, i32),
+    radius: u32,
+    img_width: u32,
+    img_height: u32,
+) -> Option<BoundingBox> {
+    // Compute raw bounds: center ± radius
+    let raw_min_x = center.0 - radius as i32;
+    let raw_max_x = center.0 + radius as i32;
+    let raw_min_y = center.1 - radius as i32;
+    let raw_max_y = center.1 + radius as i32;
+
+    // Clamp to image bounds (same logic as triangles)
+    let min_x = raw_min_x.max(0);
+    let max_x = raw_max_x.min(img_width as i32 - 1);
+    let min_y = raw_min_y.max(0);
+    let max_y = raw_max_y.min(img_height as i32 - 1);
+
+    // Return None if circle is entirely outside image
+    if min_x > max_x || min_y > max_y {
+        return None;
+    }
+
+    Some(BoundingBox {
+        min_x: min_x as u32,
+        max_x: max_x as u32,
+        min_y: min_y as u32,
+        max_y: max_y as u32,
+    })
+}
+
 /// Check if three points form a degenerate triangle
 ///
 /// A degenerate triangle has duplicate points or collinear points (zero area).
@@ -73,6 +179,9 @@ fn is_degenerate(points: &[(i32, i32); 3]) -> bool {
 /// Unlike imageproc's draw_polygon_mut which replaces pixels, this function blends
 /// the triangle color with existing pixels based on the alpha channel.
 ///
+/// **Optimization**: Uses bounding-box rendering to avoid allocating full-image buffers
+/// and scanning pixels outside the triangle region.
+///
 /// # Alpha Compositing Formula (Porter-Duff "over" operation)
 /// For each pixel where the triangle overlaps:
 /// - result_color = (src_alpha * src_color) + ((1 - src_alpha) * dst_color)
@@ -100,36 +209,65 @@ fn draw_triangle_with_alpha(img: &mut RgbaImage, points: &[Point<i32>], color: R
         return;
     }
 
-    // For semi-transparent triangles, we need to blend each pixel
-    // Strategy: Create a temporary image, draw the triangle opaquely, then blend
+    // For semi-transparent triangles, use bounding-box optimization
+    // Convert Point<i32> to (i32, i32) tuples for bbox computation
+    let raw_points: [(i32, i32); 3] = [
+        (points[0].x, points[0].y),
+        (points[1].x, points[1].y),
+        (points[2].x, points[2].y),
+    ];
 
-    // Create a temporary image for the triangle (transparent background)
-    let mut temp_img = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+    // Compute bounding box clipped to image bounds
+    let bbox = match compute_triangle_bbox(&raw_points, width, height) {
+        Some(b) => b,
+        None => return, // Triangle is entirely outside image bounds
+    };
 
-    // Draw the triangle onto the temporary image with full opacity
-    draw_polygon_mut(&mut temp_img, points, color);
+    // Create a temporary image for ONLY the bounding box region (not full image)
+    // This is the key optimization: instead of width×height, we allocate bbox_width×bbox_height
+    let bbox_width = bbox.width();
+    let bbox_height = bbox.height();
+    let mut temp_img = RgbaImage::from_pixel(bbox_width, bbox_height, Rgba([0, 0, 0, 0]));
 
-    // Blend the temporary image onto the main image using alpha compositing
-    for (x, y, temp_pixel) in temp_img.enumerate_pixels() {
-        // Skip fully transparent pixels (not part of the triangle)
-        if temp_pixel.0[3] == 0 {
-            continue;
+    // Translate triangle points from image coordinates to bounding box coordinates
+    // The temporary buffer has origin at (0, 0), so we subtract bbox.min_x/min_y
+    let bbox_points: Vec<Point<i32>> = points
+        .iter()
+        .map(|p| Point::new(p.x - bbox.min_x as i32, p.y - bbox.min_y as i32))
+        .collect();
+
+    // Draw the triangle onto the temporary image (in bbox coordinate space)
+    draw_polygon_mut(&mut temp_img, &bbox_points, color);
+
+    // Blend the temporary image onto the main image
+    // Only iterate over bounding box pixels (not the entire image)
+    let inv_alpha = 1.0 - src_alpha;
+    for bbox_y in 0..bbox_height {
+        for bbox_x in 0..bbox_width {
+            let temp_pixel = temp_img.get_pixel(bbox_x, bbox_y);
+
+            // Skip fully transparent pixels (not part of the triangle)
+            if temp_pixel.0[3] == 0 {
+                continue;
+            }
+
+            // Translate back to image coordinates for pixel access
+            let img_x = bbox.min_x + bbox_x;
+            let img_y = bbox.min_y + bbox_y;
+
+            // Get the destination pixel from main image
+            let dst_pixel = img.get_pixel(img_x, img_y);
+
+            // Apply alpha blending formula for each color channel
+            let blended = Rgba([
+                ((temp_pixel.0[0] as f32 * src_alpha) + (dst_pixel.0[0] as f32 * inv_alpha)) as u8,
+                ((temp_pixel.0[1] as f32 * src_alpha) + (dst_pixel.0[1] as f32 * inv_alpha)) as u8,
+                ((temp_pixel.0[2] as f32 * src_alpha) + (dst_pixel.0[2] as f32 * inv_alpha)) as u8,
+                255, // Keep output fully opaque since we're compositing onto opaque white
+            ]);
+
+            img.put_pixel(img_x, img_y, blended);
         }
-
-        // Get the destination pixel
-        let dst_pixel = img.get_pixel(x, y);
-
-        // Apply alpha blending formula for each color channel
-        let inv_alpha = 1.0 - src_alpha;
-        let blended = Rgba([
-            ((temp_pixel.0[0] as f32 * src_alpha) + (dst_pixel.0[0] as f32 * inv_alpha)) as u8,
-            ((temp_pixel.0[1] as f32 * src_alpha) + (dst_pixel.0[1] as f32 * inv_alpha)) as u8,
-            ((temp_pixel.0[2] as f32 * src_alpha) + (dst_pixel.0[2] as f32 * inv_alpha)) as u8,
-            // For output alpha: combine the alphas (assuming dst is fully opaque for white bg)
-            255, // Keep output fully opaque since we're compositing onto opaque white
-        ]);
-
-        img.put_pixel(x, y, blended);
     }
 }
 
@@ -138,6 +276,9 @@ fn draw_triangle_with_alpha(img: &mut RgbaImage, points: &[Point<i32>], color: R
 /// This function draws a filled circle onto the image using proper alpha compositing.
 /// Similar to draw_triangle_with_alpha, it handles transparency correctly using the
 /// Porter-Duff "over" operation.
+///
+/// **Optimization**: Uses bounding-box rendering to avoid allocating full-image buffers
+/// and scanning pixels outside the circle region.
 ///
 /// # Parameters
 /// - `img`: The destination image to draw onto
@@ -167,36 +308,58 @@ fn draw_circle_with_alpha(
         return;
     }
 
-    // For semi-transparent circles, we need to blend each pixel
-    // Strategy: Create a temporary image, draw the circle opaquely, then blend
+    // For semi-transparent circles, use bounding-box optimization
+    // Compute bounding box clipped to image bounds
+    let bbox = match compute_circle_bbox(center, radius, width, height) {
+        Some(b) => b,
+        None => return, // Circle is entirely outside image bounds
+    };
 
-    // Create a temporary image for the circle (transparent background)
-    let mut temp_img = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+    // Create a temporary image for ONLY the bounding box region (not full image)
+    // This is the key optimization: instead of width×height, we allocate bbox_width×bbox_height
+    let bbox_width = bbox.width();
+    let bbox_height = bbox.height();
+    let mut temp_img = RgbaImage::from_pixel(bbox_width, bbox_height, Rgba([0, 0, 0, 0]));
 
-    // Draw the circle onto the temporary image with full opacity
-    draw_filled_circle_mut(&mut temp_img, center, radius as i32, color);
+    // Translate circle center from image coordinates to bounding box coordinates
+    // The temporary buffer has origin at (0, 0), so we subtract bbox.min_x/min_y
+    let bbox_center = (
+        center.0 - bbox.min_x as i32,
+        center.1 - bbox.min_y as i32,
+    );
 
-    // Blend the temporary image onto the main image using alpha compositing
-    for (x, y, temp_pixel) in temp_img.enumerate_pixels() {
-        // Skip fully transparent pixels (not part of the circle)
-        if temp_pixel.0[3] == 0 {
-            continue;
+    // Draw the circle onto the temporary image (in bbox coordinate space)
+    draw_filled_circle_mut(&mut temp_img, bbox_center, radius as i32, color);
+
+    // Blend the temporary image onto the main image
+    // Only iterate over bounding box pixels (not the entire image)
+    let inv_alpha = 1.0 - src_alpha;
+    for bbox_y in 0..bbox_height {
+        for bbox_x in 0..bbox_width {
+            let temp_pixel = temp_img.get_pixel(bbox_x, bbox_y);
+
+            // Skip fully transparent pixels (not part of the circle)
+            if temp_pixel.0[3] == 0 {
+                continue;
+            }
+
+            // Translate back to image coordinates for pixel access
+            let img_x = bbox.min_x + bbox_x;
+            let img_y = bbox.min_y + bbox_y;
+
+            // Get the destination pixel from main image
+            let dst_pixel = img.get_pixel(img_x, img_y);
+
+            // Apply alpha blending formula for each color channel
+            let blended = Rgba([
+                ((temp_pixel.0[0] as f32 * src_alpha) + (dst_pixel.0[0] as f32 * inv_alpha)) as u8,
+                ((temp_pixel.0[1] as f32 * src_alpha) + (dst_pixel.0[1] as f32 * inv_alpha)) as u8,
+                ((temp_pixel.0[2] as f32 * src_alpha) + (dst_pixel.0[2] as f32 * inv_alpha)) as u8,
+                255, // Keep output fully opaque since we're compositing onto opaque white
+            ]);
+
+            img.put_pixel(img_x, img_y, blended);
         }
-
-        // Get the destination pixel
-        let dst_pixel = img.get_pixel(x, y);
-
-        // Apply alpha blending formula for each color channel
-        let inv_alpha = 1.0 - src_alpha;
-        let blended = Rgba([
-            ((temp_pixel.0[0] as f32 * src_alpha) + (dst_pixel.0[0] as f32 * inv_alpha)) as u8,
-            ((temp_pixel.0[1] as f32 * src_alpha) + (dst_pixel.0[1] as f32 * inv_alpha)) as u8,
-            ((temp_pixel.0[2] as f32 * src_alpha) + (dst_pixel.0[2] as f32 * inv_alpha)) as u8,
-            // For output alpha: combine the alphas (assuming dst is fully opaque for white bg)
-            255, // Keep output fully opaque since we're compositing onto opaque white
-        ]);
-
-        img.put_pixel(x, y, blended);
     }
 }
 
@@ -536,5 +699,228 @@ mod tests {
 
         // We should have 4 shapes total
         assert_eq!(painting.shapes.len(), 4);
+    }
+
+    // ========== Bounding Box Optimization Tests ==========
+
+    #[test]
+    fn test_triangle_bbox_fully_inside() {
+        let points = [(100, 100), (150, 120), (120, 180)];
+        let bbox = compute_triangle_bbox(&points, 800, 600).unwrap();
+        assert_eq!(bbox.min_x, 100);
+        assert_eq!(bbox.max_x, 150);
+        assert_eq!(bbox.min_y, 100);
+        assert_eq!(bbox.max_y, 180);
+        assert_eq!(bbox.width(), 51); // 150 - 100 + 1
+        assert_eq!(bbox.height(), 81); // 180 - 100 + 1
+    }
+
+    #[test]
+    fn test_triangle_bbox_partially_outside_left() {
+        let points = [(-10, 100), (50, 120), (20, 180)];
+        let bbox = compute_triangle_bbox(&points, 800, 600).unwrap();
+        assert_eq!(bbox.min_x, 0); // Clamped from -10
+        assert_eq!(bbox.max_x, 50);
+        assert_eq!(bbox.min_y, 100);
+        assert_eq!(bbox.max_y, 180);
+    }
+
+    #[test]
+    fn test_triangle_bbox_partially_outside_right() {
+        let points = [(750, 100), (850, 120), (800, 180)];
+        let bbox = compute_triangle_bbox(&points, 800, 600).unwrap();
+        assert_eq!(bbox.min_x, 750);
+        assert_eq!(bbox.max_x, 799); // Clamped from 850 to width-1
+        assert_eq!(bbox.min_y, 100);
+        assert_eq!(bbox.max_y, 180);
+    }
+
+    #[test]
+    fn test_triangle_bbox_fully_outside_left() {
+        let points = [(-100, 100), (-50, 120), (-80, 180)];
+        let bbox = compute_triangle_bbox(&points, 800, 600);
+        assert!(bbox.is_none()); // Entirely outside image
+    }
+
+    #[test]
+    fn test_triangle_bbox_fully_outside_right() {
+        let points = [(900, 100), (950, 120), (920, 180)];
+        let bbox = compute_triangle_bbox(&points, 800, 600);
+        assert!(bbox.is_none()); // Entirely outside image
+    }
+
+    #[test]
+    fn test_triangle_bbox_touching_edges() {
+        let points = [(0, 0), (799, 0), (400, 599)];
+        let bbox = compute_triangle_bbox(&points, 800, 600).unwrap();
+        assert_eq!(bbox.min_x, 0);
+        assert_eq!(bbox.max_x, 799);
+        assert_eq!(bbox.min_y, 0);
+        assert_eq!(bbox.max_y, 599);
+        assert_eq!(bbox.width(), 800);
+        assert_eq!(bbox.height(), 600);
+    }
+
+    #[test]
+    fn test_circle_bbox_fully_inside() {
+        let bbox = compute_circle_bbox((400, 300), 50, 800, 600).unwrap();
+        assert_eq!(bbox.min_x, 350); // 400 - 50
+        assert_eq!(bbox.max_x, 450); // 400 + 50
+        assert_eq!(bbox.min_y, 250); // 300 - 50
+        assert_eq!(bbox.max_y, 350); // 300 + 50
+        assert_eq!(bbox.width(), 101); // 2*radius + 1
+        assert_eq!(bbox.height(), 101);
+    }
+
+    #[test]
+    fn test_circle_bbox_partially_outside_top_left() {
+        let bbox = compute_circle_bbox((30, 30), 50, 800, 600).unwrap();
+        assert_eq!(bbox.min_x, 0); // Clamped from -20
+        assert_eq!(bbox.max_x, 80);
+        assert_eq!(bbox.min_y, 0); // Clamped from -20
+        assert_eq!(bbox.max_y, 80);
+    }
+
+    #[test]
+    fn test_circle_bbox_partially_outside_bottom_right() {
+        let bbox = compute_circle_bbox((770, 570), 50, 800, 600).unwrap();
+        assert_eq!(bbox.min_x, 720);
+        assert_eq!(bbox.max_x, 799); // Clamped from 820
+        assert_eq!(bbox.min_y, 520);
+        assert_eq!(bbox.max_y, 599); // Clamped from 620
+    }
+
+    #[test]
+    fn test_circle_bbox_fully_outside_left() {
+        let bbox = compute_circle_bbox((-100, 300), 50, 800, 600);
+        assert!(bbox.is_none()); // Entirely outside image
+    }
+
+    #[test]
+    fn test_circle_bbox_fully_outside_top() {
+        let bbox = compute_circle_bbox((400, -100), 50, 800, 600);
+        assert!(bbox.is_none()); // Entirely outside image
+    }
+
+    #[test]
+    fn test_triangle_rendering_with_negative_coords() {
+        // Test that triangles with negative coords don't panic
+        let mut img = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
+        let points = [
+            Point::new(-50, -50),
+            Point::new(-30, -30),
+            Point::new(-40, -20),
+        ];
+        let color = Rgba([255, 0, 0, 128]); // Semi-transparent red
+
+        // Should not panic, should silently skip (triangle outside bounds)
+        draw_triangle_with_alpha(&mut img, &points, color);
+
+        // Image should be unchanged (still all white)
+        assert_eq!(img.get_pixel(0, 0), &Rgba([255, 255, 255, 255]));
+        assert_eq!(img.get_pixel(50, 50), &Rgba([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn test_circle_rendering_beyond_bounds() {
+        // Test that circles beyond image bounds don't panic
+        let mut img = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
+
+        // Circle center at (200, 200), radius 50 - completely outside
+        draw_circle_with_alpha(&mut img, (200, 200), 50, Rgba([0, 255, 0, 128]));
+
+        // Image should be unchanged
+        assert_eq!(img.get_pixel(50, 50), &Rgba([255, 255, 255, 255]));
+        assert_eq!(img.get_pixel(99, 99), &Rgba([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn test_very_small_triangle_bbox() {
+        // Test tiny triangle (3×3 bbox) - tests small buffer allocation
+        let mut img = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
+        let points = [Point::new(50, 50), Point::new(52, 50), Point::new(51, 52)];
+        let color = Rgba([255, 0, 0, 128]); // Semi-transparent red
+
+        // Should complete without panic
+        draw_triangle_with_alpha(&mut img, &points, color);
+
+        // Should have drawn something (pixel at triangle location should have changed)
+        // Due to alpha blending, it won't be pure white anymore
+        let pixel = img.get_pixel(51, 51);
+        assert_ne!(pixel, &Rgba([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn test_very_small_circle_bbox() {
+        // Test tiny circle (radius 2) - tests small buffer allocation
+        let mut img = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
+        let color = Rgba([0, 0, 255, 128]); // Semi-transparent blue
+
+        // Should complete without panic
+        draw_circle_with_alpha(&mut img, (50, 50), 2, color);
+
+        // Should have drawn something (pixel at center should have changed)
+        let pixel = img.get_pixel(50, 50);
+        assert_ne!(pixel, &Rgba([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn test_triangle_partially_visible() {
+        // Test triangle that crosses image boundary
+        let mut img = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
+        let points = [Point::new(-10, 50), Point::new(30, 40), Point::new(10, 70)];
+        let color = Rgba([255, 0, 0, 128]); // Semi-transparent red
+
+        // Should complete without panic and render the visible portion
+        draw_triangle_with_alpha(&mut img, &points, color);
+
+        // Pixel at (10, 50) should be affected (inside visible triangle portion)
+        let pixel = img.get_pixel(10, 50);
+        assert_ne!(pixel, &Rgba([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn test_circle_partially_visible() {
+        // Test circle that crosses image boundary
+        let mut img = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
+        let color = Rgba([0, 255, 0, 128]); // Semi-transparent green
+
+        // Circle centered at (10, 10) with radius 20 - extends outside top-left corner
+        draw_circle_with_alpha(&mut img, (10, 10), 20, color);
+
+        // Pixel at (10, 10) (center) should be affected
+        let pixel = img.get_pixel(10, 10);
+        assert_ne!(pixel, &Rgba([255, 255, 255, 255]));
+
+        // Pixel at (20, 10) should be affected (inside circle)
+        let pixel = img.get_pixel(20, 10);
+        assert_ne!(pixel, &Rgba([255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn test_opaque_triangle_still_works() {
+        // Test that fully opaque triangles still work (fast path)
+        let mut img = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
+        let points = [Point::new(30, 30), Point::new(70, 30), Point::new(50, 70)];
+        let color = Rgba([255, 0, 0, 255]); // Fully opaque red
+
+        draw_triangle_with_alpha(&mut img, &points, color);
+
+        // Center of triangle should be red (fully opaque, no blending)
+        let pixel = img.get_pixel(50, 40);
+        assert_eq!(pixel, &Rgba([255, 0, 0, 255]));
+    }
+
+    #[test]
+    fn test_transparent_triangle_skipped() {
+        // Test that fully transparent triangles are skipped (fast path)
+        let mut img = RgbaImage::from_pixel(100, 100, Rgba([255, 255, 255, 255]));
+        let points = [Point::new(30, 30), Point::new(70, 30), Point::new(50, 70)];
+        let color = Rgba([255, 0, 0, 0]); // Fully transparent
+
+        draw_triangle_with_alpha(&mut img, &points, color);
+
+        // Image should be completely unchanged
+        assert_eq!(img.get_pixel(50, 40), &Rgba([255, 255, 255, 255]));
     }
 }
