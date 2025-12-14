@@ -1,6 +1,6 @@
 // Import our Painting type and fitness functions
 use crate::painting::{Painting, ShapeType};
-use crate::fitness::{compute_edge_weights, edge_weighted_fitness, image_diff_parallel, ms_ssim_fitness};
+use crate::fitness::{compute_edge_weights, edge_weighted_fitness, image_diff_auto, ms_ssim_fitness};
 
 // Image type for storing the target
 use image::RgbaImage;
@@ -199,7 +199,7 @@ impl Population {
             // Lower score = better match to target
             individual.fitness = Some(match self.fitness_config.function {
                 FitnessFunction::Mad => {
-                    image_diff_parallel(&rendered, &self.target_image)
+                    image_diff_auto(&rendered, &self.target_image)
                 }
                 FitnessFunction::EdgeWeighted => {
                     edge_weighted_fitness(&rendered, &self.target_image, &self.fitness_config)

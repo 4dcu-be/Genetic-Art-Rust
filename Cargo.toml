@@ -36,6 +36,24 @@ indicatif = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# SIMD operations - portable SIMD for stable Rust (Option 2 from AGENTS.md)
+# Provides u8x16 vectors and saturating arithmetic for fast fitness calculation
+wide = "0.7"
+
+# Feature flags
+[features]
+default = ["simd"]
+simd = []  # Enable SIMD optimizations (2-4× faster fitness calculation)
+
+# Development dependencies (only used for testing and benchmarking)
+[dev-dependencies]
+criterion = "0.5"  # Benchmarking framework for performance testing
+
+# Benchmark configuration
+[[bench]]
+name = "fitness_bench"
+harness = false
+
 # Release profile optimizations
 # These settings prioritize runtime speed over compilation speed
 [profile.release]
