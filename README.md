@@ -366,13 +366,6 @@ output/
 └── latest.png              # Always the most recent (for quick viewing)
 ```
 
-**Tip:** Create an animation from the images:
-```bash
-# Using ffmpeg
-ffmpeg -framerate 10 -pattern_type glob -i 'output/generation_*.png' \
-  -c:v libx264 -pix_fmt yuv420p evolution.mp4
-```
-
 ---
 
 ## 🧬 Algorithm Details
@@ -547,37 +540,6 @@ On a modern 6-core CPU (2.5 GHz):
 
 ---
 
-## 🐛 Troubleshooting
-
-### "Input file not found"
-
-**Solution:** Check the path is correct. Use absolute paths or `./` for relative paths.
-```bash
-./target/release/genetic-art --input ./input/image.jpg
-```
-
-### Out of Memory
-
-**Solution:** Reduce population size or shape count.
-```bash
---population 100 --shapes 100
-```
-
-### Very Slow Performance
-
-**Problem:** Running debug build instead of release.
-
-**Solution:** Always use `cargo build --release` and run `./target/release/genetic-art`.
-
-### Fitness Not Improving
-
-**Possible causes:**
-- Not enough generations (try 2x-5x more)
-- Population too small (increase `--population`)
-- Mutation rate too high (try lower `--mutation-rate`)
-
----
-
 ## 📚 Learning Resources
 
 ### About Genetic Algorithms
@@ -615,34 +577,9 @@ This project was created as a learning exercise. Feel free to:
 
 MIT License - see LICENSE file for details.
 
----
-
-## 🎯 Future Enhancements
-
-Completed features:
-- [x] Multiple shape types (triangles, circles)
-- [x] Alternative fitness functions (Edge-Weighted, MS-SSIM)
-
-Potential improvements:
-- [ ] Resume from checkpoint
-- [ ] Real-time preview window
-- [ ] Additional shape types (polygons, ellipses)
-- [ ] Adaptive mutation rates
-- [ ] Multi-objective optimization
-- [ ] GPU acceleration
-- [ ] WebAssembly port
-- [ ] Hybrid fitness functions (combine multiple metrics)
-
----
 
 ## 🙏 Acknowledgments
 
 - Inspired by Roger Johansson's [genetic art algorithm](https://rogerjohansson.blog/2008/12/07/genetic-programming-evolution-of-mona-lisa/)
 - Based on the [Python implementation](https://github.com/4dcu-be/Genetic-Art-Algorithm)
-- Built with Rust 🦀 - a language empowering everyone to build reliable and efficient software
 
----
-
-**Enjoy evolving art!** 🎨✨
-
-If you create something cool, share it! Tag your creations with #GeneticArtRust
